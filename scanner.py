@@ -1,220 +1,212 @@
 """
-Сканер отзывов и жалоб по Самарской области.
-Содержит демо-данные из 30 тестовых отзывов для MVP.
+Сканер реальных публичных источников по Самарской области.
+Ручной запуск через /scan — без автоматического расписания.
 """
 
+from __future__ import annotations
+
+import asyncio
+import logging
+
+logger = logging.getLogger(__name__)
+
+CITIES = ["Самара", "Тольятти", "Новокуйбышевск", "Сызрань"]
+
+NICHES = [
+    "автосервис",
+    "стоматология",
+    "клиника",
+    "ремонт квартир",
+    "салоны красоты",
+    "доставка еды",
+    "банки",
+    "жкх",
+    "юристы",
+    "грузоперевозки",
+]
+
 PAIN_KEYWORDS = [
+    "не дозвониться",
+    "не перезвонили",
     "дорого",
     "долго",
-    "не дозвониться",
+    "очередь",
     "хамство",
     "обман",
-    "очередь",
-    "не перезвонили",
-    "нет записи",
-    "плохой сервис",
     "не работает",
+    "плохой сервис",
+    "нет записи",
+    "задержали",
+    "не отвечают",
+    "навязали",
+    "сорвали сроки",
 ]
 
-DEMO_REVIEWS = [
-    # Автосервисы
-    {
-        "niche": "Автосервис",
-        "city": "Самара",
-        "text": "Сдал машину на диагностику, сказали 2 часа — ждал 6. Очень долго, никаких звонков не было.",
-    },
-    {
-        "niche": "Автосервис",
-        "city": "Тольятти",
-        "text": "Цены выросли в два раза за год. Дорого, а качество то же самое. Не перезвонили после замены масла.",
-    },
-    {
-        "niche": "Автосервис",
-        "city": "Самара",
-        "text": "Мастер нагрубил, когда спросил про стоимость. Хамство полное, больше не приду.",
-    },
-    # Стоматологии
-    {
-        "niche": "Стоматология",
-        "city": "Самара",
-        "text": "Нет записи на ближайшие 3 недели. Позвонил — не дозвониться вообще, трубку не берут.",
-    },
-    {
-        "niche": "Стоматология",
-        "city": "Тольятти",
-        "text": "Очередь на 2 часа при том, что была запись. Плохой сервис, администратор груба.",
-    },
-    {
-        "niche": "Стоматология",
-        "city": "Самара",
-        "text": "Дорого для такого качества. Пломба выпала через неделю, не перезвонили когда обещали.",
-    },
-    # ЖКХ
-    {
-        "niche": "ЖКХ",
-        "city": "Самара",
-        "text": "Горячая вода не работает уже неделю. Звоню в управляющую компанию — не дозвониться.",
-    },
-    {
-        "niche": "ЖКХ",
-        "city": "Тольятти",
-        "text": "Обман с квитанциями — начислили лишнее. Разбирался месяц, очередь в офисе на 3 часа.",
-    },
-    {
-        "niche": "ЖКХ",
-        "city": "Самара",
-        "text": "Лифт не работает третий день. Заявку приняли, но не перезвонили и мастера нет.",
-    },
-    {
-        "niche": "ЖКХ",
-        "city": "Самара",
-        "text": "Плохой сервис в расчётном центре, хамство от сотрудников. Долго стоял в очереди.",
-    },
-    # Доставка
-    {
-        "niche": "Доставка",
-        "city": "Самара",
-        "text": "Заказал доставку к 18:00 — привезли в 22:00. Долго ждал, не перезвонили о задержке.",
-    },
-    {
-        "niche": "Доставка",
-        "city": "Тольятти",
-        "text": "Не дозвониться до курьера, трубку не берёт. Посылка лежит на складе уже 5 дней.",
-    },
-    {
-        "niche": "Доставка",
-        "city": "Самара",
-        "text": "Дорого за доставку, при этом привезли не то что заказывал. Плохой сервис.",
-    },
-    # Ремонт квартир
-    {
-        "niche": "Ремонт квартир",
-        "city": "Самара",
-        "text": "Бригада пропала после предоплаты. Обман, не перезвонили, телефон заблокировали.",
-    },
-    {
-        "niche": "Ремонт квартир",
-        "city": "Тольятти",
-        "text": "Ремонт затянулся на 3 месяца вместо одного. Долго, нервы и дорого в итоге.",
-    },
-    {
-        "niche": "Ремонт квартир",
-        "city": "Самара",
-        "text": "Плохой сервис: мусор не убрали, хамство от прораба, не дозвониться в офис.",
-    },
-    # Салоны красоты
-    {
-        "niche": "Салон красоты",
-        "city": "Самара",
-        "text": "Нет записи на стрижку раньше чем через 2 недели. Дорого и очередь даже по записи.",
-    },
-    {
-        "niche": "Салон красоты",
-        "city": "Тольятти",
-        "text": "Мастер не перезвонила для подтверждения записи. Пришла — мастера нет на месте.",
-    },
-    {
-        "niche": "Салон красоты",
-        "city": "Самара",
-        "text": "Плохой сервис: покраска сделана неровно, не дозвониться до администратора потом.",
-    },
-    # Банки
-    {
-        "niche": "Банк",
-        "city": "Самара",
-        "text": "Очередь в отделении на час при живой очереди. Долго, система не работает, злой оператор.",
-    },
-    {
-        "niche": "Банк",
-        "city": "Тольятти",
-        "text": "Не дозвониться на горячую линию — 40 минут на удержании. Плохой сервис.",
-    },
-    {
-        "niche": "Банк",
-        "city": "Самара",
-        "text": "Обман с комиссией — не предупредили заранее. Хамство от менеджера при разборе ситуации.",
-    },
-    {
-        "niche": "Банк",
-        "city": "Тольятти",
-        "text": "Карта не работает уже два дня. Не перезвонили после обращения в поддержку.",
-    },
-    # Клиники
-    {
-        "niche": "Клиника",
-        "city": "Самара",
-        "text": "Нет записи к нужному врачу раньше чем через месяц. Очередь в регистратуре огромная.",
-    },
-    {
-        "niche": "Клиника",
-        "city": "Тольятти",
-        "text": "Не дозвониться для записи на приём, телефон постоянно занят. Долго добивался приёма.",
-    },
-    {
-        "niche": "Клиника",
-        "city": "Самара",
-        "text": "Дорого за анализы по сравнению с другими клиниками. Результаты не перезвонили сообщить.",
-    },
-    {
-        "niche": "Клиника",
-        "city": "Тольятти",
-        "text": "Хамство от медсестры на ресепшен. Плохой сервис, никто не объяснил порядок приёма.",
-    },
-    {
-        "niche": "Клиника",
-        "city": "Самара",
-        "text": "Обман с ценами: в рекламе одно, на месте дороже. Не дозвониться чтобы уточнить заранее.",
-    },
-    {
-        "niche": "Автосервис",
-        "city": "Тольятти",
-        "text": "Не работает система записи онлайн, пришёл вживую — очередь на весь день.",
-    },
-    {
-        "niche": "Доставка",
-        "city": "Тольятти",
-        "text": "Обещали доставить за час, везли 4. Не перезвонили, курьер нагрубил при вручении.",
-    },
-]
+MAX_SIGNALS = 50
 
 
-def scan_reviews() -> list[dict]:
-    """Сканирует демо-отзывы и находит болевые точки."""
-    results = []
-    for review in DEMO_REVIEWS:
-        text_lower = review["text"].lower()
-        found_pains = [kw for kw in PAIN_KEYWORDS if kw in text_lower]
-        if found_pains:
-            results.append({
-                "niche": review["niche"],
-                "city": review["city"],
-                "text": review["text"],
-                "pains": found_pains,
-            })
-    return results
+def _has_pain(text: str) -> list[str]:
+    t = text.lower()
+    return [kw for kw in PAIN_KEYWORDS if kw in t]
 
 
-def get_scan_summary(results: list[dict]) -> str:
-    """Формирует краткое текстовое резюме сканирования."""
-    total = len(results)
+def _dedup(signals: list[dict]) -> tuple[list[dict], int]:
+    seen: set[str] = set()
+    unique: list[dict] = []
+    for s in signals:
+        key = s["text"][:120].lower().strip()
+        url_key = s.get("url", "")
+        dedup_key = f"{key}||{url_key}"
+        if dedup_key not in seen:
+            seen.add(dedup_key)
+            unique.append(s)
+    removed = len(signals) - len(unique)
+    return unique, removed
+
+
+async def scan_sources() -> dict:
+    """
+    Запускает все источники, собирает сигналы, фильтрует по болевым словам.
+    Возвращает словарь с результатами и статистикой.
+    """
+    from sources.yandex_search_source import fetch as yandex_fetch
+    from sources.otzovik_source import fetch as otzovik_fetch
+    from sources.avito_source import fetch as avito_fetch
+
+    logger.info("[Scanner] Старт сканирования. Города: %s", CITIES)
+    logger.info("[Scanner] Ниши: %s", NICHES)
+
+    # Запускаем источники параллельно
+    yandex_task = asyncio.create_task(
+        yandex_fetch(CITIES, NICHES, PAIN_KEYWORDS, max_results=30)
+    )
+    otzovik_task = asyncio.create_task(
+        otzovik_fetch(CITIES, NICHES, PAIN_KEYWORDS, max_results=20)
+    )
+    avito_task = asyncio.create_task(
+        avito_fetch(CITIES, NICHES, PAIN_KEYWORDS, max_results=20)
+    )
+
+    yandex_raw, otzovik_raw, avito_raw = await asyncio.gather(
+        yandex_task, otzovik_task, avito_task, return_exceptions=True
+    )
+
+    # Обработка возможных исключений от gather
+    def safe(result, name: str) -> list[dict]:
+        if isinstance(result, Exception):
+            logger.warning("[Scanner] Источник %s упал с исключением: %s", name, result)
+            return []
+        return result or []
+
+    yandex_items = safe(yandex_raw, "Яндекс")
+    otzovik_items = safe(otzovik_raw, "Отзовик")
+    avito_items = safe(avito_raw, "Авито")
+
+    logger.info("[Scanner] Сырые данные — Яндекс: %d, Отзовик: %d, Авито: %d",
+                len(yandex_items), len(otzovik_items), len(avito_items))
+
+    all_signals = yandex_items + otzovik_items + avito_items
+
+    # Дедупликация
+    unique_signals, duplicates_removed = _dedup(all_signals)
+    logger.info("[Scanner] После дедупликации: %d (удалено дублей: %d)",
+                len(unique_signals), duplicates_removed)
+
+    # Фильтрация по болевым словам
+    filtered: list[dict] = []
+    for s in unique_signals:
+        pains = _has_pain(s["text"])
+        if pains:
+            s["pains"] = pains
+            filtered.append(s)
+
+    logger.info("[Scanner] После фильтрации по болевым словам: %d", len(filtered))
+
+    # Ограничиваем итог
+    result_signals = filtered[:MAX_SIGNALS]
+
+    return {
+        "signals": result_signals,
+        "stats": {
+            "yandex": len(yandex_items),
+            "otzovik": len(otzovik_items),
+            "avito": len(avito_items),
+            "total_raw": len(all_signals),
+            "after_dedup": len(unique_signals),
+            "duplicates_removed": duplicates_removed,
+            "after_filter": len(filtered),
+            "final": len(result_signals),
+        },
+    }
+
+
+def build_scan_report(scan_result: dict) -> str:
+    """Формирует текстовый отчёт для Telegram."""
+    signals = scan_result["signals"]
+    stats = scan_result["stats"]
+
+    if not signals:
+        return (
+            "⚠️ Реальные источники пока не дали данных. "
+            "Попробуйте позже или расширьте список источников."
+        )
+
+    # Подсчёт по нишам и болям
     niche_counts: dict[str, int] = {}
     pain_counts: dict[str, int] = {}
+    for s in signals:
+        niche_counts[s["niche"]] = niche_counts.get(s["niche"], 0) + 1
+        for p in s.get("pains", []):
+            pain_counts[p] = pain_counts.get(p, 0) + 1
 
-    for r in results:
-        niche_counts[r["niche"]] = niche_counts.get(r["niche"], 0) + 1
-        for pain in r["pains"]:
-            pain_counts[pain] = pain_counts.get(pain, 0) + 1
-
-    top_niches = sorted(niche_counts.items(), key=lambda x: x[1], reverse=True)[:3]
+    top_niches = sorted(niche_counts.items(), key=lambda x: x[1], reverse=True)[:5]
     top_pains = sorted(pain_counts.items(), key=lambda x: x[1], reverse=True)[:5]
 
     lines = [
-        f"Найдено жалоб: {total} из {len(DEMO_REVIEWS)}",
+        "🔥 *Радар болей Самарской области*\n",
+        f"Города: {', '.join(CITIES)}",
+        f"Найдено сигналов: *{stats['final']}*",
         "",
-        "Топ ниш по жалобам:",
-        *[f"  • {n}: {c}" for n, c in top_niches],
+        "Источники:",
+        f"• Яндекс: {stats['yandex']}",
+        f"• Отзовик: {stats['otzovik']}",
+        f"• Авито: {stats['avito']}",
         "",
-        "Топ болей:",
-        *[f"  • «{p}»: {c} упоминаний" for p, c in top_pains],
+        "ТОП-5 болей:",
     ]
+    for i, (pain, cnt) in enumerate(top_pains, 1):
+        lines.append(f"{i}. {pain} — {cnt}")
+
+    lines += ["", "ТОП-5 ниш:"]
+    for i, (niche, cnt) in enumerate(top_niches, 1):
+        lines.append(f"{i}. {niche.capitalize()} — {cnt}")
+
     return "\n".join(lines)
+
+
+# --- Обратная совместимость для синхронного кода ---
+
+def scan_reviews() -> list[dict]:
+    """Синхронная обёртка — запускает async-сканирование через asyncio.run()."""
+    result = asyncio.run(scan_sources())
+    return result["signals"]
+
+
+def get_scan_summary(results: list[dict]) -> str:
+    """Оставлена для совместимости; возвращает краткую сводку."""
+    if not results:
+        return "Сигналов не найдено."
+    niche_counts: dict[str, int] = {}
+    pain_counts: dict[str, int] = {}
+    for r in results:
+        niche_counts[r["niche"]] = niche_counts.get(r["niche"], 0) + 1
+        for p in r.get("pains", []):
+            pain_counts[p] = pain_counts.get(p, 0) + 1
+    top_n = sorted(niche_counts.items(), key=lambda x: x[1], reverse=True)[:3]
+    top_p = sorted(pain_counts.items(), key=lambda x: x[1], reverse=True)[:3]
+    lines = [f"Сигналов: {len(results)}"]
+    if top_n:
+        lines += ["Ниши: " + ", ".join(f"{n}({c})" for n, c in top_n)]
+    if top_p:
+        lines += ["Боли: " + ", ".join(f"{p}({c})" for p, c in top_p)]
+    return " | ".join(lines)

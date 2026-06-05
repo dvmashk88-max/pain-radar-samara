@@ -9,11 +9,12 @@ import asyncio
 import logging
 import os
 
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
+from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
 from dotenv import load_dotenv
 
-from scanner import CITIES, scan_sources, build_scan_report
+from scanner import CITIES, DISABLED_SOURCES, scan_sources, build_scan_report
 from ai_analyzer import analyze_complaints
 
 load_dotenv()
@@ -33,19 +34,34 @@ if not BOT_TOKEN:
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
+# --- Клавиатура ---
+
+MAIN_KEYBOARD = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🚀 Сканировать"), KeyboardButton(text="📊 Статус")],
+        [KeyboardButton(text="ℹ️ Помощь"), KeyboardButton(text="🔄 Перезапуск")],
+    ],
+    resize_keyboard=True,
+    persistent=True,
+)
+
+ACTIVE_SOURCES = ["Telegram t.me/s", "DuckDuckGo HTML", "VC.ru", "Habr Q&A"]
+
+
+# --- Команды ---
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message) -> None:
     await message.answer(
         "🔥 *Радар болей Самарской области*\n\n"
-        "Сканирую публичные отзывы и жалобы жителей Самары, Тольятти, "
-        "Новокуйбышевска и Сызрани. Нахожу повторяющиеся боли бизнеса "
-        "и предлагаю идеи продуктов.\n\n"
-        "📋 *Команды:*\n"
-        "/scan — запустить ручное сканирование\n"
-        "/status — состояние бота\n"
-        "/start — это сообщение",
-        parse_mode="Markdown",
+        "Сканирую публичные источники: Telegram-каналы, DuckDuckGo "
+        "и сайты с отзывами по Самаре, Тольятти, Новокуйбышевску и Сызрани\\.\n\n"
+        "Нахожу повторяющиеся боли бизнеса и предлагаю идеи продуктов с помощью AI\\.\n\n"
+        "📋 *Используй кнопки ниже или команды:*\n"
+        "/scan — запустить сканирование\n"
+        "/status — состояние бота\n",
+        parse_mode="MarkdownV2",
+        reply_markup=MAIN_KEYBOARD,
     )
 
 
@@ -53,24 +69,72 @@ async def cmd_start(message: types.Message) -> None:
 async def cmd_status(message: types.Message) -> None:
     admin_id_display = ADMIN_ID if ADMIN_ID else "не задан"
     cities_str = ", ".join(CITIES)
+    active_str = "\n".join(f"  \\- {s}" for s in ACTIVE_SOURCES)
+    disabled_str = "\n".join(f"  \\- {s}" for s in DISABLED_SOURCES)
+
     await message.answer(
         "✅ *Бот активен*\n\n"
         f"👤 Admin ID: `{admin_id_display}`\n"
-        f"🗺 Города: {cities_str}\n"
-        "📡 Режим: ручной скан (/scan)\n"
-        "🔍 Источники: Яндекс поиск, Отзовик, Авито\n"
-        "🤖 AI: OpenRouter (каскад из 4 моделей)\n\n"
-        "Готов к сканированию! Используй /scan",
-        parse_mode="Markdown",
+        f"🗺 Города: {cities_str}\n\n"
+        "📡 *Режим:* ручной скан\n\n"
+        f"✅ *Активные источники:*\n{active_str}\n\n"
+        f"🚫 *Отключённые источники:*\n{disabled_str}\n\n"
+        "🤖 AI: OpenRouter \\(каскад из 4 моделей\\)\n\n"
+        "Готов к сканированию\\! Нажми 🚀 или /scan",
+        parse_mode="MarkdownV2",
+        reply_markup=MAIN_KEYBOARD,
     )
 
 
 @dp.message(Command("scan"))
 async def cmd_scan(message: types.Message) -> None:
+    await _do_scan(message)
+
+
+# --- Обработчики кнопок ---
+
+@dp.message(F.text == "🚀 Сканировать")
+async def btn_scan(message: types.Message) -> None:
+    await _do_scan(message)
+
+
+@dp.message(F.text == "📊 Статус")
+async def btn_status(message: types.Message) -> None:
+    await cmd_status(message)
+
+
+@dp.message(F.text == "ℹ️ Помощь")
+async def btn_help(message: types.Message) -> None:
+    await message.answer(
+        "ℹ️ *Радар болей Самарской области*\n\n"
+        "*Что делает бот:*\n"
+        "Сканирует Telegram\\-каналы и публичные сайты в поисках жалоб "
+        "жителей Самарской области на малый бизнес\\.\n\n"
+        "*Команды:*\n"
+        "🚀 /scan — сканировать источники и получить AI\\-анализ болей\n"
+        "📊 /status — проверить состояние и список источников\n"
+        "🔄 /start — перезапустить бота\n\n"
+        "*Ниши:* автосервис, стоматология, клиника, ремонт квартир, "
+        "салоны красоты, доставка, банки, ЖКХ, юристы, грузоперевозки\n\n"
+        "*Болевые слова:* не дозвониться, хамство, обман, дорого, долго и ещё 9",
+        parse_mode="MarkdownV2",
+        reply_markup=MAIN_KEYBOARD,
+    )
+
+
+@dp.message(F.text == "🔄 Перезапуск")
+async def btn_restart(message: types.Message) -> None:
+    await cmd_start(message)
+
+
+# --- Логика сканирования ---
+
+async def _do_scan(message: types.Message) -> None:
     status_msg = await message.answer(
-        "🔍 Сканирую публичные источники...\n"
-        "_(Яндекс, Отзовик, Авито — может занять 30-60 секунд)_",
-        parse_mode="Markdown",
+        "🔍 Сканирую публичные источники\\.\\.\\.\n"
+        "_Telegram каналы, DuckDuckGo — займёт 30\\-90 секунд_",
+        parse_mode="MarkdownV2",
+        reply_markup=MAIN_KEYBOARD,
     )
 
     try:
@@ -82,40 +146,47 @@ async def cmd_scan(message: types.Message) -> None:
 
     signals = scan_result["signals"]
     stats = scan_result["stats"]
-
     logger.info("[Bot] Scan done: %s", stats)
-
-    # Строим отчёт с данными о сигналах
-    report = build_scan_report(scan_result)
 
     if not signals:
         await status_msg.edit_text(
-            "⚠️ Реальные источники пока не дали данных.\n"
-            "Попробуйте позже или расширьте список источников."
+            "⚠️ Источники пока не дали данных\\.\n"
+            "Попробуйте позже или нажмите 🚀 ещё раз\\.",
+            parse_mode="MarkdownV2",
         )
         return
 
-    # Обновляем статус-сообщение → отчёт + запуск AI
+    report = build_scan_report(scan_result)
+
     await status_msg.edit_text(
-        report + "\n\n🤖 _Запускаю AI-анализ..._",
-        parse_mode="Markdown",
+        report + "\n\n🤖 _AI\\-анализ запущен\\.\\.\\._",
+        parse_mode="MarkdownV2",
     )
 
-    # AI-анализ
     ai_result = await analyze_complaints(signals)
 
-    # Итоговое сообщение: отчёт + AI-вывод
+    # Экранируем спецсимволы MarkdownV2 в AI-ответе для безопасной отправки
     final = f"{report}\n\n{ai_result}"
 
     max_len = 4000
     if len(final) <= max_len:
-        await status_msg.edit_text(final, parse_mode="Markdown")
+        try:
+            await status_msg.edit_text(final, parse_mode="MarkdownV2")
+        except Exception:
+            # AI-ответ может содержать неэкранированный Markdown — шлём plain text
+            await status_msg.edit_text(final, parse_mode=None)
     else:
-        # Обновляем первое сообщение отчётом, AI шлём отдельно
-        await status_msg.edit_text(report, parse_mode="Markdown")
+        try:
+            await status_msg.edit_text(report, parse_mode="MarkdownV2")
+        except Exception:
+            await status_msg.edit_text(report)
+        # AI-ответ отдельным сообщением
         chunks = [ai_result[i:i + max_len] for i in range(0, len(ai_result), max_len)]
         for chunk in chunks:
-            await message.answer(chunk, parse_mode="Markdown")
+            try:
+                await message.answer(chunk, parse_mode="MarkdownV2")
+            except Exception:
+                await message.answer(chunk)
 
 
 async def main() -> None:

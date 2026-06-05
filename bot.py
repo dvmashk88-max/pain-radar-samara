@@ -125,7 +125,7 @@ async def btn_restart(message: types.Message) -> None:
 # --- Логика сканирования ---
 
 async def _do_scan(message: types.Message) -> None:
-    status_msg = await message.answer(
+    await message.answer(
         "🔍 Сканирую публичные источники...\n"
         "Telegram каналы, DuckDuckGo — займёт 30-90 секунд",
         reply_markup=MAIN_KEYBOARD,
@@ -135,7 +135,7 @@ async def _do_scan(message: types.Message) -> None:
         scan_result = await scan_sources()
     except Exception as exc:
         logger.error("[Bot] Ошибка scan_sources: %s", exc)
-        await status_msg.edit_text(f"❌ Ошибка сканирования: {exc}")
+        await message.answer(f"❌ Ошибка сканирования: {exc}")
         return
 
     signals = scan_result["signals"]
@@ -143,28 +143,23 @@ async def _do_scan(message: types.Message) -> None:
     logger.info("[Bot] Scan done: %s", stats)
 
     if not signals:
-        await status_msg.edit_text(
+        await message.answer(
             "⚠️ Источники пока не дали данных.\n"
             "Попробуйте позже или нажмите 🚀 ещё раз."
         )
         return
 
     report = build_scan_report(scan_result)
+    await message.answer(report)
 
-    await status_msg.edit_text(report + "\n\n🤖 AI-анализ запущен...")
+    await message.answer("🤖 AI-анализ запущен...")
 
     ai_result = await analyze_complaints(signals)
 
-    final = f"{report}\n\n{ai_result}"
-
     max_len = 4000
-    if len(final) <= max_len:
-        await status_msg.edit_text(final)
-    else:
-        await status_msg.edit_text(report)
-        chunks = [ai_result[i:i + max_len] for i in range(0, len(ai_result), max_len)]
-        for chunk in chunks:
-            await message.answer(chunk)
+    chunks = [ai_result[i:i + max_len] for i in range(0, len(ai_result), max_len)]
+    for chunk in chunks:
+        await message.answer(chunk)
 
 
 async def main() -> None:

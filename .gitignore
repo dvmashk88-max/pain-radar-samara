@@ -216,3 +216,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Pain Radar local database
+data/*.db
+data/*.db-shm
+data/*.db-wal

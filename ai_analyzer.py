@@ -128,28 +128,107 @@ async def _call_model(session: aiohttp.ClientSession, model: str, prompt: str) -
     return None
 
 
-async def analyze_complaints(complaints: list[dict]) -> str:
-    """Отправляет жалобы в OpenRouter и возвращает анализ ТОП болей."""
-    key_loaded = bool(OPENROUTER_API_KEY)
-    logger.info("[OpenRouter] API key loaded: %s", key_loaded)
-
-    if not key_loaded:
+async def _run_cascade(prompt: str) -> str:
+    """Прогоняет промпт через каскад моделей, возвращает первый успешный ответ."""
+    if not OPENROUTER_API_KEY:
         return "❌ OPENROUTER_API_KEY не задан в переменных окружения."
 
-    prompt = _build_user_prompt(complaints)
-    logger.info("[OpenRouter] Starting cascade over %d models, prompt_len=%d",
-                len(MODEL_CASCADE), len(prompt))
+    logger.info("[OpenRouter] Cascade start, prompt_len=%d", len(prompt))
 
     async with aiohttp.ClientSession() as session:
         for model in MODEL_CASCADE:
             result = await _call_model(session, model, prompt)
             if result:
-                logger.info("[OpenRouter] Success with model: %s", model)
-                return f"_Модель: {model}_\n\n{result}"
-            logger.info("[OpenRouter] Model %s failed, trying next...", model)
+                logger.info("[OpenRouter] Success: %s", model)
+                return result
+            logger.info("[OpenRouter] %s failed, trying next...", model)
 
-    logger.error("[OpenRouter] All %d models failed.", len(MODEL_CASCADE))
+    logger.error("[OpenRouter] All models failed.")
     return (
         "❌ Все модели OpenRouter недоступны или вернули пустой ответ.\n"
         "Попробуйте позже или проверьте API-ключ."
     )
+
+
+async def analyze_complaints(complaints: list[dict]) -> str:
+    """Анализирует сигналы текущего скана."""
+    if not OPENROUTER_API_KEY:
+        return "❌ OPENROUTER_API_KEY не задан в переменных окружения."
+    prompt = _build_user_prompt(complaints)
+    return await _run_cascade(prompt)
+
+
+def _build_history_prompt(signals: list[dict], period_label: str) -> str:
+    """Строит промпт для анализа исторических данных из БД."""
+    lines = [f"Жалобы жителей Самарской области за {period_label}:\n"]
+
+    pain_counts: dict[str, int] = {}
+    niche_counts: dict[str, int] = {}
+
+    for i, s in enumerate(signals[:40], 1):
+        pains = s.get("pains", [])
+        if isinstance(pains, str):
+            pains = [p.strip() for p in pains.split(",") if p.strip()]
+        pains_str = ", ".join(pains)
+        lines.append(
+            f"{i}. [{s.get('niche','?')} / {s.get('city','?')}] "
+            f"{s.get('text','')[:150]}"
+        )
+        if pains_str:
+            lines.append(f"   Боли: {pains_str}")
+        for p in pains:
+            pain_counts[p] = pain_counts.get(p, 0) + 1
+        n = s.get("niche", "")
+        if n:
+            niche_counts[n] = niche_counts.get(n, 0) + 1
+
+    top_pains = sorted(pain_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+    top_niches = sorted(niche_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+
+    summary = []
+    if top_pains:
+        summary.append("Топ болей: " + ", ".join(f"{p}({c})" for p, c in top_pains))
+    if top_niches:
+        summary.append("Топ ниш: " + ", ".join(f"{n}({c})" for n, c in top_niches))
+    if summary:
+        lines.append("\nСтатистика: " + " | ".join(summary))
+
+    if period_label.startswith("7"):
+        lines.append("""
+Сделай короткий AI-вывод СТРОГО в формате (только список, без таблиц):
+
+🤖 AI-вывод за неделю:
+- Главная боль недели: [одна фраза]
+- Ниша недели: [ниша + почему]
+- Что проверить быстро: [конкретное действие]
+- Идея продукта: [конкретная идея]
+- Оценка возможности: [X]/10""")
+    else:
+        lines.append("""
+Сделай короткий AI-вывод СТРОГО в формате (только список, без таблиц):
+
+🤖 AI-вывод за месяц:
+- Главная боль месяца: [одна фраза]
+- Ниша месяца: [ниша + почему]
+- Тренд месяца: [что нарастает]
+- Идея продукта: [конкретная идея]
+- Оценка возможности: [X]/10""")
+
+    return "\n".join(lines)
+
+
+async def analyze_history(signals: list[dict], period: str) -> str:
+    """
+    Анализирует исторические сигналы из БД.
+    period: '7 дней' или '30 дней'
+    """
+    if not OPENROUTER_API_KEY:
+        return "❌ OPENROUTER_API_KEY не задан в переменных окружения."
+    if not signals:
+        return (
+            "Пока мало данных.\n"
+            "Нажмите 🔍 Сканировать несколько раз в разные дни — "
+            "данные накопятся и AI-анализ станет точнее."
+        )
+    prompt = _build_history_prompt(signals, period)
+    return await _run_cascade(prompt)

@@ -157,24 +157,24 @@ def build_scan_report(scan_result: dict) -> str:
     top_pains = sorted(pain_counts.items(), key=lambda x: x[1], reverse=True)[:5]
 
     lines = [
-        "🔥 *Радар болей Самарской области*\n",
+        "🔥 Радар болей Самарской области\n",
         f"Города: {', '.join(CITIES)}",
-        f"Найдено сигналов: *{stats['final']}*",
+        f"Найдено сигналов: {stats['final']}",
         "",
         "Источники:",
         f"• Telegram: {stats['telegram']}",
         f"• DuckDuckGo: {stats['duckduckgo']}",
-        f"• VC\\.ru: {stats['vc']}",
+        f"• VC.ru: {stats['vc']}",
         f"• Habr Q&A: {stats['habr']}",
         "",
-        "ТОП\\-5 болей:",
+        "ТОП-5 болей:",
     ]
     for i, (pain, cnt) in enumerate(top_pains, 1):
-        lines.append(f"{i}\\. {pain} — {cnt}")
+        lines.append(f"{i}. {pain} — {cnt}")
 
-    lines += ["", "ТОП\\-5 ниш:"]
+    lines += ["", "ТОП-5 ниш:"]
     for i, (niche, cnt) in enumerate(top_niches, 1):
-        lines.append(f"{i}\\. {niche.capitalize()} — {cnt}")
+        lines.append(f"{i}. {niche.capitalize()} — {cnt}")
 
     return "\n".join(lines)
 

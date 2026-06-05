@@ -34,8 +34,6 @@ if not BOT_TOKEN:
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# --- Клавиатура ---
-
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="🚀 Сканировать"), KeyboardButton(text="📊 Статус")],
@@ -53,14 +51,13 @@ ACTIVE_SOURCES = ["Telegram t.me/s", "DuckDuckGo HTML", "VC.ru", "Habr Q&A"]
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message) -> None:
     await message.answer(
-        "🔥 *Радар болей Самарской области*\n\n"
-        "Сканирую публичные источники: Telegram-каналы, DuckDuckGo "
-        "и сайты с отзывами по Самаре, Тольятти, Новокуйбышевску и Сызрани\\.\n\n"
-        "Нахожу повторяющиеся боли бизнеса и предлагаю идеи продуктов с помощью AI\\.\n\n"
-        "📋 *Используй кнопки ниже или команды:*\n"
+        "🔥 Радар болей Самарской области\n\n"
+        "Сканирую публичные источники: Telegram-каналы и DuckDuckGo "
+        "по Самаре, Тольятти, Новокуйбышевску и Сызрани.\n\n"
+        "Нахожу повторяющиеся боли бизнеса и предлагаю идеи продуктов с помощью AI.\n\n"
+        "Используй кнопки ниже или команды:\n"
         "/scan — запустить сканирование\n"
-        "/status — состояние бота\n",
-        parse_mode="MarkdownV2",
+        "/status — состояние бота",
         reply_markup=MAIN_KEYBOARD,
     )
 
@@ -69,19 +66,18 @@ async def cmd_start(message: types.Message) -> None:
 async def cmd_status(message: types.Message) -> None:
     admin_id_display = ADMIN_ID if ADMIN_ID else "не задан"
     cities_str = ", ".join(CITIES)
-    active_str = "\n".join(f"  \\- {s}" for s in ACTIVE_SOURCES)
-    disabled_str = "\n".join(f"  \\- {s}" for s in DISABLED_SOURCES)
+    active_str = "\n".join(f"  - {s}" for s in ACTIVE_SOURCES)
+    disabled_str = "\n".join(f"  - {s}" for s in DISABLED_SOURCES)
 
     await message.answer(
-        "✅ *Бот активен*\n\n"
-        f"👤 Admin ID: `{admin_id_display}`\n"
-        f"🗺 Города: {cities_str}\n\n"
-        "📡 *Режим:* ручной скан\n\n"
-        f"✅ *Активные источники:*\n{active_str}\n\n"
-        f"🚫 *Отключённые источники:*\n{disabled_str}\n\n"
-        "🤖 AI: OpenRouter \\(каскад из 4 моделей\\)\n\n"
-        "Готов к сканированию\\! Нажми 🚀 или /scan",
-        parse_mode="MarkdownV2",
+        "✅ Бот активен\n\n"
+        f"Admin ID: {admin_id_display}\n"
+        f"Города: {cities_str}\n\n"
+        "Режим: ручной скан\n\n"
+        f"Активные источники:\n{active_str}\n\n"
+        f"Отключённые источники (блокируют):\n{disabled_str}\n\n"
+        "AI: OpenRouter (каскад из 4 моделей)\n\n"
+        "Нажми 🚀 или /scan для сканирования",
         reply_markup=MAIN_KEYBOARD,
     )
 
@@ -105,19 +101,18 @@ async def btn_status(message: types.Message) -> None:
 
 @dp.message(F.text == "ℹ️ Помощь")
 async def btn_help(message: types.Message) -> None:
+    niches = "автосервис, стоматология, клиника, ремонт квартир, салоны красоты, доставка, банки, ЖКХ, юристы, грузоперевозки"
     await message.answer(
-        "ℹ️ *Радар болей Самарской области*\n\n"
-        "*Что делает бот:*\n"
-        "Сканирует Telegram\\-каналы и публичные сайты в поисках жалоб "
-        "жителей Самарской области на малый бизнес\\.\n\n"
-        "*Команды:*\n"
-        "🚀 /scan — сканировать источники и получить AI\\-анализ болей\n"
+        "ℹ️ Радар болей Самарской области\n\n"
+        "Что делает бот:\n"
+        "Сканирует Telegram-каналы и публичные сайты в поисках жалоб "
+        "жителей Самарской области на малый бизнес.\n\n"
+        "Команды:\n"
+        "🚀 /scan — сканировать источники и получить AI-анализ болей\n"
         "📊 /status — проверить состояние и список источников\n"
         "🔄 /start — перезапустить бота\n\n"
-        "*Ниши:* автосервис, стоматология, клиника, ремонт квартир, "
-        "салоны красоты, доставка, банки, ЖКХ, юристы, грузоперевозки\n\n"
-        "*Болевые слова:* не дозвониться, хамство, обман, дорого, долго и ещё 9",
-        parse_mode="MarkdownV2",
+        f"Ниши: {niches}\n\n"
+        "Болевые слова: не дозвониться, хамство, обман, дорого, долго и ещё 9",
         reply_markup=MAIN_KEYBOARD,
     )
 
@@ -131,9 +126,8 @@ async def btn_restart(message: types.Message) -> None:
 
 async def _do_scan(message: types.Message) -> None:
     status_msg = await message.answer(
-        "🔍 Сканирую публичные источники\\.\\.\\.\n"
-        "_Telegram каналы, DuckDuckGo — займёт 30\\-90 секунд_",
-        parse_mode="MarkdownV2",
+        "🔍 Сканирую публичные источники...\n"
+        "Telegram каналы, DuckDuckGo — займёт 30-90 секунд",
         reply_markup=MAIN_KEYBOARD,
     )
 
@@ -150,43 +144,27 @@ async def _do_scan(message: types.Message) -> None:
 
     if not signals:
         await status_msg.edit_text(
-            "⚠️ Источники пока не дали данных\\.\n"
-            "Попробуйте позже или нажмите 🚀 ещё раз\\.",
-            parse_mode="MarkdownV2",
+            "⚠️ Источники пока не дали данных.\n"
+            "Попробуйте позже или нажмите 🚀 ещё раз."
         )
         return
 
     report = build_scan_report(scan_result)
 
-    await status_msg.edit_text(
-        report + "\n\n🤖 _AI\\-анализ запущен\\.\\.\\._",
-        parse_mode="MarkdownV2",
-    )
+    await status_msg.edit_text(report + "\n\n🤖 AI-анализ запущен...")
 
     ai_result = await analyze_complaints(signals)
 
-    # Экранируем спецсимволы MarkdownV2 в AI-ответе для безопасной отправки
     final = f"{report}\n\n{ai_result}"
 
     max_len = 4000
     if len(final) <= max_len:
-        try:
-            await status_msg.edit_text(final, parse_mode="MarkdownV2")
-        except Exception:
-            # AI-ответ может содержать неэкранированный Markdown — шлём plain text
-            await status_msg.edit_text(final, parse_mode=None)
+        await status_msg.edit_text(final)
     else:
-        try:
-            await status_msg.edit_text(report, parse_mode="MarkdownV2")
-        except Exception:
-            await status_msg.edit_text(report)
-        # AI-ответ отдельным сообщением
+        await status_msg.edit_text(report)
         chunks = [ai_result[i:i + max_len] for i in range(0, len(ai_result), max_len)]
         for chunk in chunks:
-            try:
-                await message.answer(chunk, parse_mode="MarkdownV2")
-            except Exception:
-                await message.answer(chunk)
+            await message.answer(chunk)
 
 
 async def main() -> None:

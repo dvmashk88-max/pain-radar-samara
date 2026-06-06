@@ -39,10 +39,14 @@ PAIN_KEYWORDS = [
     "не работает",
     "плохой сервис",
     "нет записи",
-    "задержали",
     "не отвечают",
     "навязали",
     "сорвали сроки",
+    "жалоба",
+    "мусор",
+    "не убирают",
+    "грязь",
+    "плевать",
 ]
 
 MAX_SIGNALS = 50
@@ -148,13 +152,18 @@ def build_scan_report(scan_result: dict) -> str:
 
     niche_counts: dict[str, int] = {}
     pain_counts: dict[str, int] = {}
+    city_counts: dict[str, int] = {}
     for s in signals:
         niche_counts[s["niche"]] = niche_counts.get(s["niche"], 0) + 1
+        city = s.get("city", "")
+        if city:
+            city_counts[city] = city_counts.get(city, 0) + 1
         for p in s.get("pains", []):
             pain_counts[p] = pain_counts.get(p, 0) + 1
 
     top_niches = sorted(niche_counts.items(), key=lambda x: x[1], reverse=True)[:5]
     top_pains = sorted(pain_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+    top_cities = sorted(city_counts.items(), key=lambda x: x[1], reverse=True)
 
     lines = [
         "🔥 Радар болей Самарской области\n",
@@ -171,6 +180,10 @@ def build_scan_report(scan_result: dict) -> str:
     ]
     for i, (pain, cnt) in enumerate(top_pains, 1):
         lines.append(f"{i}. {pain} — {cnt}")
+
+    lines += ["", "Города в текущем скане:"]
+    for city, cnt in top_cities:
+        lines.append(f"• {city}: {cnt}")
 
     lines += ["", "ТОП-5 ниш:"]
     for i, (niche, cnt) in enumerate(top_niches, 1):

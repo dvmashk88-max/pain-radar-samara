@@ -16,12 +16,17 @@ logger = logging.getLogger(__name__)
 
 SOURCE_NAME = "Telegram"
 
-# Публичные каналы о Самарской области
+# Публичные каналы о Самарской области: (channel_name, fallback_city)
 CHANNELS = [
-    "chp_samara",       # ЧП Самара — происшествия, жалобы
-    "samara",           # Самара — городские новости
-    "tlt_online",       # Тольятти онлайн
-    "podslushano_tlt",  # Подслушано Тольятти
+    ("chp_samara", "Самара"),       # ЧП Самара — происшествия, жалобы
+    ("samara", "Самара"),           # Самара — городские новости
+    ("tlt_online", "Тольятти"),      # Тольятти онлайн
+    ("typ_tlt", "Тольятти"),         # Типичный Тольятти
+    ("tolyattij", "Тольятти"),       # Тольятти Подслушано
+    ("podslushano_tlt", "Тольятти"), # Подслушано Тольятти
+    ("MoyGorodNSK", "Новокуйбышевск"),
+    ("nvklife63", "Новокуйбышевск"),
+    ("syzranvip", "Сызрань"),
 ]
 
 HEADERS = {
@@ -45,6 +50,35 @@ _HTML_ENTITIES = [
     ("&#33;", "!"), ("&#8212;", "—"), ("&#8211;", "–"),
 ]
 
+STOP_TOPICS = [
+    "дтп",
+    "авария",
+    "пожар",
+    "погиб",
+    "погибл",
+    "задержали",
+    "задержан",
+    "полиция",
+    "сво",
+    "дрон",
+    "бпла",
+    "происшеств",
+    "криминал",
+    "суд",
+    "арест",
+    "колони",
+    "нож",
+]
+
+QUEUE_FALSE_POSITIVES = [
+    "в первую очередь",
+    "во вторую очередь",
+    "вторую очередь",
+    "третью очередь",
+    "очередь аллеи",
+    "очередь строительства",
+]
+
 
 def _clean(html: str) -> str:
     text = _TAG_RE.sub(" ", html)
@@ -56,6 +90,7 @@ def _clean(html: str) -> str:
 async def _fetch_channel(
     session: aiohttp.ClientSession,
     channel: str,
+    fallback_city: str,
     pain_keywords: list[str],
 ) -> list[dict]:
     url = f"https://t.me/s/{channel}"
@@ -77,7 +112,6 @@ async def _fetch_channel(
                 return []
 
             results = []
-            city = "Тольятти" if "tlt" in channel else "Самара"
 
             for match in _POST_RE.finditer(html):
                 text = _clean(match.group(1))
@@ -85,11 +119,14 @@ async def _fetch_channel(
                     continue
 
                 text_lower = text.lower()
-                found_pains = [kw for kw in pain_keywords if kw in text_lower]
+                if _is_irrelevant(text_lower):
+                    continue
+
+                found_pains = _find_pains(text_lower, pain_keywords)
                 if not found_pains:
                     continue
 
-                # Определяем нишу по ключевым словам в тексте
+                city = _detect_city(text_lower, fallback_city)
                 niche = _detect_niche(text_lower)
 
                 results.append({
@@ -113,12 +150,60 @@ async def _fetch_channel(
     return []
 
 
+def _is_irrelevant(text: str) -> bool:
+    return any(stop_word in text for stop_word in STOP_TOPICS)
+
+
+def _find_pains(text: str, pain_keywords: list[str]) -> list[str]:
+    found = []
+    for keyword in pain_keywords:
+        if keyword not in text:
+            continue
+        if keyword == "очередь" and any(phrase in text for phrase in QUEUE_FALSE_POSITIVES):
+            continue
+        found.append(keyword)
+    return found
+
+
+def _detect_city(text: str, fallback_city: str) -> str:
+    city_map = [
+        ("Новокуйбышевск", ["новокуйбышевск", "новокуйбышевц"]),
+        ("Сызрань", ["сызран", "сызранск"]),
+        ("Тольятти", ["тольятти", "тлт", "tlt"]),
+        ("Самара", ["самар", "samara"]),
+    ]
+    for city, markers in city_map:
+        if any(marker in text for marker in markers):
+            return city
+    return fallback_city
+
+
 def _detect_niche(text: str) -> str:
     niche_map = [
-        ("автосервис", ["автосервис", "авто", "машин", "ремонт авто", "sto", "сто", "шиномонтаж"]),
+        (
+            "жкх",
+            [
+                "жкх",
+                "управляющая",
+                "коммунал",
+                "жилищн",
+                "водоснабж",
+                "теплоснабж",
+                "мусор",
+                "свалк",
+                "не убирают",
+                "уборка",
+                "гряз",
+                "двор",
+                "дорог",
+                "тротуар",
+                "площадк",
+                "автостанц",
+            ],
+        ),
+        ("автосервис", ["автосервис", "ремонт авто", "sto", "сто", "шиномонтаж"]),
         ("клиника", ["больниц", "поликлиник", "врач", "скорая", "медицин", "клиник"]),
         ("стоматология", ["стоматолог", "зуб", "дантист"]),
-        ("жкх", ["жкх", "управляющая", "коммунал", "жилищн", "водоснабж", "теплоснабж"]),
         ("доставка еды", ["доставк", "курьер", "привез", "заказ еды"]),
         ("банки", ["банк", "кредит", "карта", "займ", "вклад"]),
         ("ремонт квартир", ["ремонт квартир", "строитель", "прораб", "бригада"]),
@@ -142,10 +227,10 @@ async def fetch(
     results: list[dict] = []
 
     async with aiohttp.ClientSession() as session:
-        for channel in CHANNELS:
+        for channel, fallback_city in CHANNELS:
             if len(results) >= max_results:
                 break
-            items = await _fetch_channel(session, channel, pain_keywords)
+            items = await _fetch_channel(session, channel, fallback_city, pain_keywords)
             results.extend(items)
             await asyncio.sleep(1.0)
 

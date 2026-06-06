@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 import re
 import urllib.parse
 
@@ -43,7 +44,6 @@ QUERIES: list[tuple[str, str, str, str]] = [
     ("Тольятти обман ремонт квартиры", "ремонт квартир", "Тольятти", "обман"),
     ("Самара очередь поликлиника жалоба", "клиника", "Самара", "очередь"),
     ("Тольятти не перезвонили салон красоты", "салоны красоты", "Тольятти", "не перезвонили"),
-    ("Самара задержали доставка жалоба", "доставка еды", "Самара", "задержали"),
     ("Тольятти хамство банк отзывы", "банки", "Тольятти", "хамство"),
     ("Самара навязали услуги жалоба", "банки", "Самара", "навязали"),
     ("Тольятти долго ждать автосервис", "автосервис", "Тольятти", "долго"),
@@ -60,6 +60,24 @@ QUERIES: list[tuple[str, str, str, str]] = [
 _TAG_RE = re.compile(r"<[^>]+>")
 _TITLE_RE = re.compile(r'class="result__a"[^>]*>(.*?)</a>', re.DOTALL | re.IGNORECASE)
 _HTML_ENT = [("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">"), ("&quot;", '"'), ("&nbsp;", " ")]
+STOP_TOPICS = [
+    "дтп",
+    "авария",
+    "пожар",
+    "погиб",
+    "задержали",
+    "задержан",
+    "полиция",
+    "сво",
+    "дрон",
+    "бпла",
+    "происшеств",
+    "криминал",
+    "суд",
+    "арест",
+    "колони",
+    "нож",
+]
 
 
 def _clean(html: str) -> str:
@@ -67,6 +85,11 @@ def _clean(html: str) -> str:
     for ent, ch in _HTML_ENT:
         text = text.replace(ent, ch)
     return " ".join(text.split()).strip()
+
+
+def _is_irrelevant(text: str) -> bool:
+    text_lower = text.lower()
+    return any(stop_word in text_lower for stop_word in STOP_TOPICS)
 
 
 async def _fetch_query(
@@ -101,9 +124,11 @@ async def _fetch_query(
             titles = _TITLE_RE.findall(html)
             results = []
 
-            for raw_title in titles[:5]:
+            for raw_title in titles:
                 title = _clean(raw_title)
                 if len(title) < 15:
+                    continue
+                if _is_irrelevant(title):
                     continue
                 # Формируем текст сигнала: заголовок + контекст из запроса
                 text = f"{title}. Запрос: {query}"
@@ -115,6 +140,7 @@ async def _fetch_query(
                     "url": url,
                     "pains": [pain],
                 })
+                break
 
             logger.info("[DDG] «%s»: %d заголовков", query[:50], len(results))
             return results
@@ -134,15 +160,17 @@ async def fetch(
 ) -> list[dict]:
     """Собирает заголовки из DuckDuckGo по заданным запросам."""
     results: list[dict] = []
+    queries = QUERIES.copy()
+    random.shuffle(queries)
 
     async with aiohttp.ClientSession() as session:
-        for query, niche, city, pain in QUERIES:
+        for query, niche, city, pain in queries:
             if len(results) >= max_results:
                 break
             items = await _fetch_query(session, query, niche, city, pain)
             results.extend(items)
             # Задержка между запросами
-            await asyncio.sleep(1.5)
+            await asyncio.sleep(2.5)
 
     logger.info("[DDG] Итого: %d сигналов", len(results))
     return results[:max_results]

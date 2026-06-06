@@ -133,6 +133,15 @@ def filter_new_signals(signals: list[dict]) -> tuple[list[dict], int]:
     return new_signals, skipped
 
 
+def clear_signals() -> int:
+    """Удаляет все сохранённые сигналы и возвращает количество удалённых строк."""
+    with _conn() as con:
+        count = con.execute("SELECT COUNT(*) FROM signals").fetchone()[0]
+        con.execute("DELETE FROM signals")
+    logger.warning("[DB] Очищены все сигналы: %d", count)
+    return count
+
+
 def get_signals_since(days: int) -> list[dict]:
     """Возвращает сигналы за последние N дней."""
     since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()

@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 from scanner import CITIES, DISABLED_SOURCES, scan_sources, build_scan_report
 from ai_analyzer import analyze_complaints, analyze_history
 from database import (
+    clear_signals,
     filter_new_signals,
     get_signals_since,
     get_stats,
@@ -76,6 +77,12 @@ def _is_button(message: types.Message, label: str) -> bool:
     return _clean_text(message.text) == _clean_text(label)
 
 
+def _is_admin(message: types.Message) -> bool:
+    if not ADMIN_ID or not message.from_user:
+        return False
+    return str(message.from_user.id) == str(ADMIN_ID)
+
+
 # --- Команды ---
 
 @dp.message(Command("start"))
@@ -91,7 +98,8 @@ async def cmd_start(message: types.Message) -> None:
         "/stats — статистика из базы\n"
         "/ai_week — AI-анализ за 7 дней\n"
         "/ai_month — AI-анализ за 30 дней\n"
-        "/status — состояние бота",
+        "/status — состояние бота\n"
+        "/reset_data — очистить тестовую базу (только админ)",
         reply_markup=MAIN_KEYBOARD,
     )
 
@@ -139,6 +147,21 @@ async def cmd_ai_week(message: types.Message) -> None:
 @dp.message(lambda message: _is_command(message, "ai_month"))
 async def cmd_ai_month(message: types.Message) -> None:
     await _do_ai_history(message, days=30, period="30 дней")
+
+
+@dp.message(Command("reset_data"))
+@dp.message(lambda message: _is_command(message, "reset_data"))
+async def cmd_reset_data(message: types.Message) -> None:
+    if not _is_admin(message):
+        await message.answer("⛔ Команда доступна только администратору.")
+        return
+
+    deleted = clear_signals()
+    await message.answer(
+        f"🧹 Тестовая база очищена: удалено {deleted} сигналов.\n"
+        "Теперь нажмите 🔍 Сканировать, чтобы собрать статистику заново.",
+        reply_markup=MAIN_KEYBOARD,
+    )
 
 
 # --- Обработчики кнопок ---
@@ -191,7 +214,8 @@ async def btn_help(message: types.Message) -> None:
         "📊 /stats — статистика из базы\n"
         "🤖 /ai_week — AI-анализ за 7 дней\n"
         "🤖 /ai_month — AI-анализ за 30 дней\n"
-        "ℹ️ /status — состояние бота\n\n"
+        "ℹ️ /status — состояние бота\n"
+        "🧹 /reset_data — очистить тестовую базу (только админ)\n\n"
         f"Ниши: {niches}\n\n"
         "Болевые слова: не дозвониться, хамство, обман, дорого, долго и ещё 9",
         reply_markup=MAIN_KEYBOARD,

@@ -101,6 +101,38 @@ def save_signals(signals: list[dict]) -> tuple[int, int]:
     return saved, skipped
 
 
+def filter_new_signals(signals: list[dict]) -> tuple[list[dict], int]:
+    """
+    Возвращает только сигналы, которых ещё нет в БД.
+    Дедупликация такая же, как в save_signals: (source, url, text[:300]).
+    """
+    if not signals:
+        return [], 0
+
+    with _conn() as con:
+        existing: set[tuple[str, str, str]] = {
+            (row["source"], row["url"], row["text"][:_TEXT_KEY_LEN])
+            for row in con.execute("SELECT source, url, text FROM signals")
+        }
+
+    new_signals: list[dict] = []
+    skipped = 0
+    for signal in signals:
+        text = signal.get("text", "")
+        key = (
+            signal.get("source", ""),
+            signal.get("url", ""),
+            text[:_TEXT_KEY_LEN],
+        )
+        if key in existing:
+            skipped += 1
+            continue
+        existing.add(key)
+        new_signals.append(signal)
+
+    return new_signals, skipped
+
+
 def get_signals_since(days: int) -> list[dict]:
     """Возвращает сигналы за последние N дней."""
     since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()

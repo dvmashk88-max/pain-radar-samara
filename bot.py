@@ -17,7 +17,13 @@ from dotenv import load_dotenv
 
 from scanner import CITIES, DISABLED_SOURCES, scan_sources, build_scan_report
 from ai_analyzer import analyze_complaints, analyze_history
-from database import init_db, save_signals, get_signals_since, get_stats
+from database import (
+    filter_new_signals,
+    get_signals_since,
+    get_stats,
+    init_db,
+    save_signals,
+)
 
 load_dotenv()
 
@@ -234,16 +240,27 @@ async def _do_scan(message: types.Message) -> None:
         )
         return
 
-    # Сохраняем в БД
-    saved, skipped = save_signals(signals)
+    # Сохраняем в БД только новые сигналы. Иначе AI будет повторять старый анализ.
+    new_signals, existing_duplicates = filter_new_signals(signals)
+    saved, save_duplicates = save_signals(new_signals)
+    skipped = existing_duplicates + save_duplicates
 
     report = build_scan_report(scan_result)
     db_line = f"\nСохранено в базу: {saved} новых, {skipped} дублей пропущено"
     await message.answer(report + db_line)
 
+    if saved == 0:
+        await message.answer(
+            "Новых сигналов с прошлого скана нет.\n"
+            "Источники часто отдают те же публичные посты и поисковые заголовки; "
+            "AI-анализ не запускаю, чтобы не повторять старый ответ.",
+            reply_markup=MAIN_KEYBOARD,
+        )
+        return
+
     await message.answer("🤖 AI-анализ текущего скана запущен...")
 
-    ai_result = await analyze_complaints(signals)
+    ai_result = await analyze_complaints(new_signals)
     for chunk in _send_chunks(ai_result):
         await message.answer(chunk)
 

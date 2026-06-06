@@ -1,6 +1,6 @@
 """
 Telegram-бот «Радар болей Самарской области».
-Запуск: python bot.py
+Запуск: python3 bot.py
 """
 
 from __future__ import annotations
@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
@@ -53,9 +54,26 @@ def _send_chunks(text: str, max_len: int = 4000) -> list[str]:
     return [text[i:i + max_len] for i in range(0, len(text), max_len)]
 
 
+def _clean_text(text: str | None) -> str:
+    if not text:
+        return ""
+    text = text.replace("\ufe0f", "")
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _is_command(message: types.Message, command: str) -> bool:
+    text = _clean_text(message.text)
+    return bool(re.fullmatch(rf"/{command}(?:@\w+)?", text, flags=re.IGNORECASE))
+
+
+def _is_button(message: types.Message, label: str) -> bool:
+    return _clean_text(message.text) == _clean_text(label)
+
+
 # --- Команды ---
 
 @dp.message(Command("start"))
+@dp.message(lambda message: _is_command(message, "start"))
 async def cmd_start(message: types.Message) -> None:
     await message.answer(
         "🔥 Радар болей Самарской области\n\n"
@@ -73,6 +91,7 @@ async def cmd_start(message: types.Message) -> None:
 
 
 @dp.message(Command("status"))
+@dp.message(lambda message: _is_command(message, "status"))
 async def cmd_status(message: types.Message) -> None:
     admin_id_display = ADMIN_ID if ADMIN_ID else "не задан"
     cities_str = ", ".join(CITIES)
@@ -93,21 +112,25 @@ async def cmd_status(message: types.Message) -> None:
 
 
 @dp.message(Command("scan"))
+@dp.message(lambda message: _is_command(message, "scan"))
 async def cmd_scan(message: types.Message) -> None:
     await _do_scan(message)
 
 
 @dp.message(Command("stats"))
+@dp.message(lambda message: _is_command(message, "stats"))
 async def cmd_stats(message: types.Message) -> None:
     await _do_stats(message)
 
 
 @dp.message(Command("ai_week"))
+@dp.message(lambda message: _is_command(message, "ai_week"))
 async def cmd_ai_week(message: types.Message) -> None:
     await _do_ai_history(message, days=7, period="7 дней")
 
 
 @dp.message(Command("ai_month"))
+@dp.message(lambda message: _is_command(message, "ai_month"))
 async def cmd_ai_month(message: types.Message) -> None:
     await _do_ai_history(message, days=30, period="30 дней")
 
@@ -115,31 +138,37 @@ async def cmd_ai_month(message: types.Message) -> None:
 # --- Обработчики кнопок ---
 
 @dp.message(F.text == "🔍 Сканировать")
+@dp.message(lambda message: _is_button(message, "🔍 Сканировать"))
 async def btn_scan(message: types.Message) -> None:
     await _do_scan(message)
 
 
 @dp.message(F.text == "📊 Статистика")
+@dp.message(lambda message: _is_button(message, "📊 Статистика"))
 async def btn_stats(message: types.Message) -> None:
     await _do_stats(message)
 
 
 @dp.message(F.text == "🤖 AI за 7 дней")
+@dp.message(lambda message: _is_button(message, "🤖 AI за 7 дней"))
 async def btn_ai_week(message: types.Message) -> None:
     await _do_ai_history(message, days=7, period="7 дней")
 
 
 @dp.message(F.text == "🤖 AI за 30 дней")
+@dp.message(lambda message: _is_button(message, "🤖 AI за 30 дней"))
 async def btn_ai_month(message: types.Message) -> None:
     await _do_ai_history(message, days=30, period="30 дней")
 
 
 @dp.message(F.text == "ℹ️ Статус")
+@dp.message(lambda message: _is_button(message, "ℹ️ Статус"))
 async def btn_status(message: types.Message) -> None:
     await cmd_status(message)
 
 
 @dp.message(F.text == "❓ Помощь")
+@dp.message(lambda message: _is_button(message, "❓ Помощь"))
 async def btn_help(message: types.Message) -> None:
     niches = (
         "автосервис, стоматология, клиника, ремонт квартир, "
@@ -159,6 +188,21 @@ async def btn_help(message: types.Message) -> None:
         "ℹ️ /status — состояние бота\n\n"
         f"Ниши: {niches}\n\n"
         "Болевые слова: не дозвониться, хамство, обман, дорого, долго и ещё 9",
+        reply_markup=MAIN_KEYBOARD,
+    )
+
+
+@dp.message()
+async def fallback_message(message: types.Message) -> None:
+    logger.info(
+        "[Bot] Unmatched message: user_id=%s chat_id=%s content_type=%s text=%r",
+        message.from_user.id if message.from_user else None,
+        message.chat.id if message.chat else None,
+        message.content_type,
+        message.text,
+    )
+    await message.answer(
+        "Не распознал команду. Нажмите /start или выберите кнопку в меню.",
         reply_markup=MAIN_KEYBOARD,
     )
 

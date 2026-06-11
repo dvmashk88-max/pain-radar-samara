@@ -1,5 +1,5 @@
 """
-Telegram-бот «Радар болей Самарской области».
+Telegram-бот «Не Взлетит».
 Запуск: python3 bot.py
 """
 
@@ -12,21 +12,17 @@ import re
 
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
-from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
+from aiogram.types import BotCommand, KeyboardButton, ReplyKeyboardMarkup
 from dotenv import load_dotenv
 
-from scanner import CITIES, DISABLED_SOURCES, scan_sources, build_scan_report
-from ai_analyzer import analyze_complaints, analyze_history
-from database import (
-    clear_signals,
-    filter_new_signals,
-    get_signals_since,
-    get_stats,
-    init_db,
-    save_signals,
-)
+from ai_analyzer import roast_idea
 
 load_dotenv()
+
+# На некоторых окружениях aiogram 3 + uvloop + Python 3.9 падают при создании
+# Dispatcher вне активного event loop. Для Railway и локального запуска хватает
+# стандартной политики asyncio.
+asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
 
 logging.basicConfig(
     level=logging.INFO,
@@ -36,6 +32,7 @@ logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 ADMIN_ID = os.getenv("TELEGRAM_ADMIN_ID")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
 if not BOT_TOKEN:
     raise RuntimeError("TELEGRAM_BOT_TOKEN не задан в .env")
@@ -43,18 +40,58 @@ if not BOT_TOKEN:
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
+BOT_COMMANDS = [
+    BotCommand(command="start", description="Начать разбор идей"),
+    BotCommand(command="help", description="Как это работает"),
+    BotCommand(command="status", description="Статус бота"),
+]
+
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="🔍 Сканировать"), KeyboardButton(text="📊 Статистика")],
-        [KeyboardButton(text="🤖 AI за 7 дней"), KeyboardButton(text="🤖 AI за 30 дней")],
-        [KeyboardButton(text="ℹ️ Статус"), KeyboardButton(text="❓ Помощь")],
+        [KeyboardButton(text="💀 Разнести идею")],
+        [KeyboardButton(text="❓ Как это работает"), KeyboardButton(text="ℹ️ Статус")],
     ],
     resize_keyboard=True,
     persistent=True,
 )
 
-ACTIVE_SOURCES = ["Telegram t.me/s", "DuckDuckGo HTML", "VC.ru", "Habr Q&A"]
-MIN_SIGNALS_FOR_AI = 3
+HELP_TEXT = (
+    "Ты кидаешь идею.\n"
+    "Бот прогоняет её через трёх персонажей:\n\n"
+    "🎭 Подъёбщик — ищет, где ты сам себя обманываешь.\n"
+    "⚖️ Прокурор — бьёт по фактам, рынку, деньгам, конкуренции и слабым местам.\n"
+    "😈 Адвокат — ищет единственный шанс, при котором идея может выжить.\n\n"
+    "В конце бот даёт вердикт:\n"
+    "🟢 Жива\n"
+    "🟡 Сомнительно\n"
+    "🔴 Пошла нахуй"
+)
+
+START_TEXT = (
+    "💀 Не Взлетит\n\n"
+    "Принеси идею.\n"
+    "Если она говно — я сэкономлю тебе полгода жизни.\n"
+    "Если не говно — сам удивлюсь.\n\n"
+    "Напиши идею одним сообщением.\n"
+    "Например:\n"
+    "“Хочу открыть кофейню возле института”\n"
+    "“Хочу сделать сервис для владельцев китайских авто”\n"
+    "“Хочу запустить маркетплейс цифровых услуг”"
+)
+
+NON_IDEA_REPLIES = {
+    "привет",
+    "привет!",
+    "здравствуйте",
+    "добрый день",
+    "добрый вечер",
+    "спасибо",
+    "спс",
+    "ок",
+    "как дела",
+    "ты кто",
+    "что ты умеешь",
+}
 
 
 def _send_chunks(text: str, max_len: int = 4000) -> list[str]:
@@ -77,117 +114,54 @@ def _is_button(message: types.Message, label: str) -> bool:
     return _clean_text(message.text) == _clean_text(label)
 
 
-def _is_admin(message: types.Message) -> bool:
-    if not ADMIN_ID or not message.from_user:
-        return False
-    return str(message.from_user.id) == str(ADMIN_ID)
+def _looks_like_non_idea(text: str) -> bool:
+    normalized = _clean_text(text).lower().strip(".,!?")
+    return normalized in NON_IDEA_REPLIES
 
-
-# --- Команды ---
 
 @dp.message(Command("start"))
 @dp.message(lambda message: _is_command(message, "start"))
 async def cmd_start(message: types.Message) -> None:
-    await message.answer(
-        "🔥 Радар болей Самарской области\n\n"
-        "Сканирую Telegram-каналы и DuckDuckGo по Самаре, Тольятти, "
-        "Новокуйбышевску и Сызрани.\n"
-        "Накапливаю сигналы в базе и делаю AI-анализ за 7 и 30 дней.\n\n"
-        "Команды:\n"
-        "/scan — собрать новые сигналы\n"
-        "/stats — статистика из базы\n"
-        "/ai_week — AI-анализ за 7 дней\n"
-        "/ai_month — AI-анализ за 30 дней\n"
-        "/status — состояние бота\n"
-        "/reset_data — очистить тестовую базу (только админ)",
-        reply_markup=MAIN_KEYBOARD,
-    )
+    await message.answer(START_TEXT, reply_markup=MAIN_KEYBOARD)
+
+
+@dp.message(Command("help"))
+@dp.message(lambda message: _is_command(message, "help"))
+async def cmd_help(message: types.Message) -> None:
+    await message.answer(HELP_TEXT, reply_markup=MAIN_KEYBOARD)
 
 
 @dp.message(Command("status"))
 @dp.message(lambda message: _is_command(message, "status"))
 async def cmd_status(message: types.Message) -> None:
     admin_id_display = ADMIN_ID if ADMIN_ID else "не задан"
-    cities_str = ", ".join(CITIES)
-    active_str = "\n".join(f"  - {s}" for s in ACTIVE_SOURCES)
-    disabled_str = "\n".join(f"  - {s}" for s in DISABLED_SOURCES)
+    openrouter_status = "задан" if OPENROUTER_API_KEY else "не задан"
 
     await message.answer(
-        "✅ Бот активен\n\n"
+        "✅ Не Взлетит активен\n\n"
+        "Режим: разбор идей по одному сообщению\n"
+        "Сканирование источников: отключено\n"
+        "База статистики: не используется в интерфейсе\n\n"
         f"Admin ID: {admin_id_display}\n"
-        f"Города: {cities_str}\n\n"
-        "Режим: ручной скан\n"
-        "База данных: SQLite (data/pain_radar.db)\n\n"
-        f"Активные источники:\n{active_str}\n\n"
-        f"Отключённые (блокируют с Railway):\n{disabled_str}\n\n"
-        "AI: OpenRouter (каскад из 4 моделей)",
+        f"OpenRouter API key: {openrouter_status}",
         reply_markup=MAIN_KEYBOARD,
     )
 
 
-@dp.message(Command("scan"))
-@dp.message(lambda message: _is_command(message, "scan"))
-async def cmd_scan(message: types.Message) -> None:
-    await _do_scan(message)
-
-
-@dp.message(Command("stats"))
-@dp.message(lambda message: _is_command(message, "stats"))
-async def cmd_stats(message: types.Message) -> None:
-    await _do_stats(message)
-
-
-@dp.message(Command("ai_week"))
-@dp.message(lambda message: _is_command(message, "ai_week"))
-async def cmd_ai_week(message: types.Message) -> None:
-    await _do_ai_history(message, days=7, period="7 дней")
-
-
-@dp.message(Command("ai_month"))
-@dp.message(lambda message: _is_command(message, "ai_month"))
-async def cmd_ai_month(message: types.Message) -> None:
-    await _do_ai_history(message, days=30, period="30 дней")
-
-
-@dp.message(Command("reset_data"))
-@dp.message(lambda message: _is_command(message, "reset_data"))
-async def cmd_reset_data(message: types.Message) -> None:
-    if not _is_admin(message):
-        await message.answer("⛔ Команда доступна только администратору.")
-        return
-
-    deleted = clear_signals()
+@dp.message(F.text == "💀 Разнести идею")
+@dp.message(lambda message: _is_button(message, "💀 Разнести идею"))
+async def btn_roast(message: types.Message) -> None:
     await message.answer(
-        f"🧹 Тестовая база очищена: удалено {deleted} сигналов.\n"
-        "Теперь нажмите 🔍 Сканировать, чтобы собрать статистику заново.",
+        "Кидай идею одним сообщением. Не презентацию на 40 слайдов, а суть: "
+        "что продаёшь, кому, почему они должны платить.",
         reply_markup=MAIN_KEYBOARD,
     )
 
 
-# --- Обработчики кнопок ---
-
-@dp.message(F.text == "🔍 Сканировать")
-@dp.message(lambda message: _is_button(message, "🔍 Сканировать"))
-async def btn_scan(message: types.Message) -> None:
-    await _do_scan(message)
-
-
-@dp.message(F.text == "📊 Статистика")
-@dp.message(lambda message: _is_button(message, "📊 Статистика"))
-async def btn_stats(message: types.Message) -> None:
-    await _do_stats(message)
-
-
-@dp.message(F.text == "🤖 AI за 7 дней")
-@dp.message(lambda message: _is_button(message, "🤖 AI за 7 дней"))
-async def btn_ai_week(message: types.Message) -> None:
-    await _do_ai_history(message, days=7, period="7 дней")
-
-
-@dp.message(F.text == "🤖 AI за 30 дней")
-@dp.message(lambda message: _is_button(message, "🤖 AI за 30 дней"))
-async def btn_ai_month(message: types.Message) -> None:
-    await _do_ai_history(message, days=30, period="30 дней")
+@dp.message(F.text == "❓ Как это работает")
+@dp.message(lambda message: _is_button(message, "❓ Как это работает"))
+async def btn_help(message: types.Message) -> None:
+    await cmd_help(message)
 
 
 @dp.message(F.text == "ℹ️ Статус")
@@ -196,168 +170,49 @@ async def btn_status(message: types.Message) -> None:
     await cmd_status(message)
 
 
-@dp.message(F.text == "❓ Помощь")
-@dp.message(lambda message: _is_button(message, "❓ Помощь"))
-async def btn_help(message: types.Message) -> None:
-    niches = (
-        "автосервис, стоматология, клиника, ремонт квартир, "
-        "салоны красоты, доставка, банки, ЖКХ, юристы, грузоперевозки"
-    )
-    await message.answer(
-        "❓ Радар болей Самарской области\n\n"
-        "Что делает бот:\n"
-        "Сканирует Telegram-каналы и DuckDuckGo, собирает жалобы "
-        "жителей Самарской области на малый бизнес, сохраняет в базу "
-        "и делает AI-анализ накопленных данных.\n\n"
-        "Команды:\n"
-        "🔍 /scan — сканировать и сохранить новые сигналы\n"
-        "📊 /stats — статистика из базы\n"
-        "🤖 /ai_week — AI-анализ за 7 дней\n"
-        "🤖 /ai_month — AI-анализ за 30 дней\n"
-        "ℹ️ /status — состояние бота\n"
-        "🧹 /reset_data — очистить тестовую базу (только админ)\n\n"
-        f"Ниши: {niches}\n\n"
-        "Болевые слова: не дозвониться, хамство, обман, дорого, долго и ещё 9",
-        reply_markup=MAIN_KEYBOARD,
-    )
-
-
-@dp.message()
-async def fallback_message(message: types.Message) -> None:
+@dp.message(F.text)
+async def fallback_text(message: types.Message) -> None:
+    text = _clean_text(message.text)
     logger.info(
-        "[Bot] Unmatched message: user_id=%s chat_id=%s content_type=%s text=%r",
+        "[Bot] Idea message: user_id=%s chat_id=%s len=%d text=%r",
         message.from_user.id if message.from_user else None,
         message.chat.id if message.chat else None,
-        message.content_type,
-        message.text,
-    )
-    await message.answer(
-        "Не распознал команду. Нажмите /start или выберите кнопку в меню.",
-        reply_markup=MAIN_KEYBOARD,
+        len(text),
+        text[:300],
     )
 
-
-# --- Бизнес-логика ---
-
-async def _do_scan(message: types.Message) -> None:
-    await message.answer(
-        "🔍 Сканирую публичные источники...\n"
-        "Telegram каналы, DuckDuckGo — займёт 30-90 секунд",
-        reply_markup=MAIN_KEYBOARD,
-    )
-
-    try:
-        scan_result = await scan_sources()
-    except Exception as exc:
-        logger.error("[Bot] Ошибка scan_sources: %s", exc)
-        await message.answer(f"❌ Ошибка сканирования: {exc}")
-        return
-
-    signals = scan_result["signals"]
-    stats = scan_result["stats"]
-    logger.info("[Bot] Scan done: %s", stats)
-
-    if not signals:
+    if text.startswith("/"):
         await message.answer(
-            "⚠️ Источники пока не дали данных.\n"
-            "Попробуйте позже или нажмите 🔍 ещё раз."
-        )
-        return
-
-    # Сохраняем в БД только новые сигналы. Иначе AI будет повторять старый анализ.
-    new_signals, existing_duplicates = filter_new_signals(signals)
-    saved, save_duplicates = save_signals(new_signals)
-    skipped = existing_duplicates + save_duplicates
-
-    report = build_scan_report(scan_result)
-    db_line = f"\nСохранено в базу: {saved} новых, {skipped} дублей пропущено"
-    await message.answer(report + db_line)
-
-    if saved == 0:
-        await message.answer(
-            "Новых сигналов с прошлого скана нет.\n"
-            "Источники часто отдают те же публичные посты и поисковые заголовки; "
-            "AI-анализ не запускаю, чтобы не повторять старый ответ.",
+            "Я не знаю такую команду. Тут всё проще: тащи идею — будем хоронить или спасать.",
             reply_markup=MAIN_KEYBOARD,
         )
         return
 
-    await message.answer("🤖 AI-анализ текущего скана запущен...")
-
-    ai_result = await analyze_complaints(new_signals)
-    for chunk in _send_chunks(ai_result):
-        await message.answer(chunk)
-
-
-async def _do_stats(message: types.Message) -> None:
-    try:
-        st = get_stats()
-    except Exception as exc:
-        logger.error("[Bot] Ошибка get_stats: %s", exc)
-        await message.answer(f"❌ Ошибка чтения базы: {exc}")
-        return
-
-    lines = [
-        "📊 Статистика Pain Radar\n",
-        f"Сегодня: {st['today']} сигналов",
-        f"За 7 дней: {st['week']} сигналов",
-        f"За 30 дней: {st['month']} сигналов",
-    ]
-
-    if st["top_pains_week"]:
-        lines += ["", "ТОП-10 болей за 7 дней:"]
-        for i, (pain, cnt) in enumerate(st["top_pains_week"], 1):
-            lines.append(f"  {i}. {pain} — {cnt}")
-
-    if st["top_niches_week"]:
-        lines += ["", "ТОП-10 ниш за 7 дней:"]
-        for i, (niche, cnt) in enumerate(st["top_niches_week"], 1):
-            lines.append(f"  {i}. {niche.capitalize()} — {cnt}")
-
-    if st["top_cities_month"]:
-        lines += ["", "ТОП-5 городов за 30 дней:"]
-        for i, (city, cnt) in enumerate(st["top_cities_month"], 1):
-            lines.append(f"  {i}. {city} — {cnt}")
-
-    if st["month"] == 0:
-        lines += ["", "База пуста. Нажмите 🔍 Сканировать для сбора данных."]
-
-    await message.answer("\n".join(lines), reply_markup=MAIN_KEYBOARD)
-
-
-async def _do_ai_history(message: types.Message, days: int, period: str) -> None:
-    label = "7 дней" if days == 7 else "30 дней"
-    await message.answer(
-        f"🤖 Загружаю данные за {label} и запускаю AI-анализ...",
-        reply_markup=MAIN_KEYBOARD,
-    )
-
-    try:
-        signals = get_signals_since(days)
-    except Exception as exc:
-        logger.error("[Bot] Ошибка get_signals_since: %s", exc)
-        await message.answer(f"❌ Ошибка чтения базы: {exc}")
-        return
-
-    if len(signals) < MIN_SIGNALS_FOR_AI:
+    if _looks_like_non_idea(text):
         await message.answer(
-            f"Пока мало данных за {label} ({len(signals)} сигналов).\n"
-            "Нажмите 🔍 Сканировать несколько раз в разные дни — "
-            "данные накопятся и AI-анализ станет точнее."
+            "Я не психолог и не справочная. Тащи идею — будем хоронить или спасать.",
+            reply_markup=MAIN_KEYBOARD,
         )
         return
 
-    logger.info("[Bot] AI history: %d signals for %s", len(signals), period)
-    result = await analyze_history(signals, period)
-
+    await message.answer("💀 Разбираю идею...", reply_markup=MAIN_KEYBOARD)
+    result = await roast_idea(text)
     for chunk in _send_chunks(result):
         await message.answer(chunk)
 
 
+@dp.message()
+async def fallback_message(message: types.Message) -> None:
+    await message.answer(
+        "Я разбираю только текстовые идеи. Пришли одну фразу или абзац — и начнём.",
+        reply_markup=MAIN_KEYBOARD,
+    )
+
+
 async def main() -> None:
-    logger.info("Запуск бота «Радар болей Самарской области»...")
+    logger.info("Запуск бота «Не Взлетит»...")
     logger.info("Admin ID: %s", ADMIN_ID)
-    init_db()
+    await bot.set_my_commands(BOT_COMMANDS)
     await dp.start_polling(bot)
 
 

@@ -1,5 +1,5 @@
 """
-SQLite-хранилище сигналов Pain Radar.
+SQLite-хранилище проекта.
 База создаётся автоматически в data/pain_radar.db.
 """
 
@@ -31,6 +31,37 @@ CREATE INDEX IF NOT EXISTS idx_signals_created_at ON signals(created_at);
 CREATE INDEX IF NOT EXISTS idx_signals_niche      ON signals(niche);
 """
 
+_CREATE_IDEA_TABLES = """
+CREATE TABLE IF NOT EXISTS idea_users (
+    user_id     INTEGER PRIMARY KEY,
+    username    TEXT NOT NULL DEFAULT '',
+    first_name  TEXT NOT NULL DEFAULT '',
+    last_name   TEXT NOT NULL DEFAULT '',
+    first_seen  TEXT NOT NULL,
+    last_seen   TEXT NOT NULL,
+    messages    INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS idea_messages (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT    NOT NULL,
+    user_id    INTEGER NOT NULL,
+    text       TEXT    NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS ideas (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT    NOT NULL,
+    user_id    INTEGER NOT NULL,
+    idea_text  TEXT    NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_idea_messages_created_at ON idea_messages(created_at);
+CREATE INDEX IF NOT EXISTS idx_idea_messages_user_id    ON idea_messages(user_id);
+CREATE INDEX IF NOT EXISTS idx_ideas_created_at         ON ideas(created_at);
+CREATE INDEX IF NOT EXISTS idx_ideas_user_id            ON ideas(user_id);
+"""
+
 # Текст обрезается до 300 символов для дедупликации
 _TEXT_KEY_LEN = 300
 
@@ -47,6 +78,114 @@ def init_db() -> None:
     with _conn() as con:
         con.executescript(_CREATE_TABLE)
     logger.info("[DB] Инициализирована: %s", DB_PATH)
+
+
+def init_idea_db() -> None:
+    """Создаёт таблицы для MVP «Не Взлетит»."""
+    with _conn() as con:
+        con.executescript(_CREATE_IDEA_TABLES)
+    logger.info("[DB] Таблицы идей и статистики инициализированы: %s", DB_PATH)
+
+
+def track_idea_user_message(
+    user_id: int,
+    text: str,
+    username: str = "",
+    first_name: str = "",
+    last_name: str = "",
+) -> None:
+    """Сохраняет сообщение и обновляет простую статистику пользователя."""
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        con.execute(
+            """
+            INSERT INTO idea_users
+                (user_id, username, first_name, last_name, first_seen, last_seen, messages)
+            VALUES (?, ?, ?, ?, ?, ?, 1)
+            ON CONFLICT(user_id) DO UPDATE SET
+                username = excluded.username,
+                first_name = excluded.first_name,
+                last_name = excluded.last_name,
+                last_seen = excluded.last_seen,
+                messages = messages + 1
+            """,
+            (user_id, username, first_name, last_name, now, now),
+        )
+        con.execute(
+            "INSERT INTO idea_messages (created_at, user_id, text) VALUES (?, ?, ?)",
+            (now, user_id, text),
+        )
+
+
+def save_idea(user_id: int, idea_text: str) -> int:
+    """Сохраняет идею пользователя и возвращает id записи."""
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO ideas (created_at, user_id, idea_text) VALUES (?, ?, ?)",
+            (now, user_id, idea_text),
+        )
+        return int(cur.lastrowid)
+
+
+def get_idea_stats() -> dict:
+    """Возвращает статистику посещений и присланных идей."""
+    now = datetime.now(timezone.utc)
+    today = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    week_ago = (now - timedelta(days=7)).isoformat()
+
+    with _conn() as con:
+        users_total = con.execute("SELECT COUNT(*) FROM idea_users").fetchone()[0]
+        users_today = con.execute(
+            "SELECT COUNT(*) FROM idea_users WHERE last_seen >= ?",
+            (today,),
+        ).fetchone()[0]
+        messages_total = con.execute("SELECT COUNT(*) FROM idea_messages").fetchone()[0]
+        messages_today = con.execute(
+            "SELECT COUNT(*) FROM idea_messages WHERE created_at >= ?",
+            (today,),
+        ).fetchone()[0]
+        ideas_total = con.execute("SELECT COUNT(*) FROM ideas").fetchone()[0]
+        ideas_today = con.execute(
+            "SELECT COUNT(*) FROM ideas WHERE created_at >= ?",
+            (today,),
+        ).fetchone()[0]
+        ideas_week = con.execute(
+            "SELECT COUNT(*) FROM ideas WHERE created_at >= ?",
+            (week_ago,),
+        ).fetchone()[0]
+
+    return {
+        "users_total": users_total,
+        "users_today": users_today,
+        "messages_total": messages_total,
+        "messages_today": messages_today,
+        "ideas_total": ideas_total,
+        "ideas_today": ideas_today,
+        "ideas_week": ideas_week,
+    }
+
+
+def get_recent_ideas(limit: int = 10) -> list[dict]:
+    """Возвращает последние идеи пользователей."""
+    with _conn() as con:
+        rows = con.execute(
+            """
+            SELECT
+                ideas.id,
+                ideas.created_at,
+                ideas.user_id,
+                ideas.idea_text,
+                idea_users.username,
+                idea_users.first_name
+            FROM ideas
+            LEFT JOIN idea_users ON idea_users.user_id = ideas.user_id
+            ORDER BY ideas.created_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def save_signals(signals: list[dict]) -> tuple[int, int]:

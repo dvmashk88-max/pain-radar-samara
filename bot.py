@@ -66,7 +66,7 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup(
 
 HELP_TEXT = (
     "Ты кидаешь идею.\n"
-    "Бот прогоняет её через трёх персонажей:\n\n"
+    "Бот запускает маленькое шоу из трёх персонажей:\n\n"
     "💀 Разъёбщик — ищет, где ты сам себя обманываешь.\n"
     "⚖️ Прокурор — бьёт по фактам, рынку, деньгам, конкуренции и слабым местам.\n"
     "😈 Адвокат — ищет единственный шанс, при котором идея может выжить.\n\n"
@@ -74,7 +74,8 @@ HELP_TEXT = (
     "🟢 Жива\n"
     "🟡 Сомнительно\n"
     "🔴 Пошла нахуй\n\n"
-    "А потом не отпускает тебя в закат, а задаёт вопросы и докапывается дальше."
+    "Потом идёт 2–3 раунда вопросов: клиент, деньги, канал продаж.\n"
+    "В финале бот подводит итог, закрывает разговор и ждёт следующую идею."
 )
 
 START_TEXT = (
@@ -119,6 +120,40 @@ CLOSING_REPLIES = {
     "ясно",
 }
 
+NEW_IDEA_STARTERS = (
+    "хочу",
+    "идея",
+    "есть идея",
+    "новая идея",
+    "другая идея",
+    "еще идея",
+    "ещё идея",
+    "открыть",
+    "запустить",
+    "сделать",
+    "создать",
+    "продавать",
+)
+
+IDEA_CONTEXT_MARKERS = (
+    "сервис",
+    "приложение",
+    "бот",
+    "маркетплейс",
+    "кофейня",
+    "сто",
+    "автосервис",
+    "стартап",
+    "проект",
+)
+
+STAGE_FLOW = {
+    "client": "money",
+    "money": "channel",
+    "channel": "final",
+}
+
+MAX_TURNS_PER_IDEA = 4
 USER_SESSIONS: dict[int, dict[str, str | int | bool]] = {}
 
 
@@ -150,6 +185,36 @@ def _looks_like_non_idea(text: str) -> bool:
 def _looks_like_closing(text: str) -> bool:
     normalized = _clean_text(text).lower().strip(".,!?")
     return normalized in CLOSING_REPLIES
+
+
+def _looks_like_new_idea(text: str) -> bool:
+    normalized = _clean_text(text).lower()
+    if len(normalized) < 8:
+        return False
+    if any(phrase in normalized for phrase in ("новая идея", "другая идея", "еще идея", "ещё идея")):
+        return True
+    if normalized.startswith(NEW_IDEA_STARTERS):
+        return True
+    return bool(
+        re.search(
+            r"\bхочу\b.{0,80}\b(открыть|запустить|сделать|создать|продавать|сервис|приложение|бот|маркетплейс|кофей|сто|автосервис)",
+            normalized,
+        )
+        or re.search(
+            r"\b(открыть|запустить|сделать|создать)\b.{0,80}\b(сервис|приложение|бот|маркетплейс|кофей|сто|автосервис|стартап|проект)",
+            normalized,
+        )
+    )
+
+
+def _is_admin(message: types.Message) -> bool:
+    if not ADMIN_ID or not message.from_user:
+        return False
+    return str(message.from_user.id) == str(ADMIN_ID)
+
+
+def _next_stage(stage: str) -> str:
+    return STAGE_FLOW.get(stage, "final")
 
 
 def _track_message(message: types.Message, text: str) -> None:
@@ -208,6 +273,14 @@ async def cmd_stats(message: types.Message) -> None:
 @dp.message(lambda message: _is_command(message, "ideas"))
 async def cmd_ideas(message: types.Message) -> None:
     _track_message(message, _clean_text(message.text) or "/ideas")
+    if not _is_admin(message):
+        await message.answer(
+            "🗃 Архив идей — это backstage, братан.\n\n"
+            "Пока он доступен только автору проекта, чтобы чужие идеи не гуляли по залу.",
+            reply_markup=MAIN_KEYBOARD,
+        )
+        return
+
     ideas = get_recent_ideas(limit=10)
     if not ideas:
         await message.answer(
@@ -234,7 +307,11 @@ async def cmd_ideas(message: types.Message) -> None:
 async def btn_roast(message: types.Message) -> None:
     _track_message(message, _clean_text(message.text) or "💀 Разнести идею")
     if message.from_user:
-        USER_SESSIONS[message.from_user.id] = {"awaiting_new_idea": True, "turn_count": 0}
+        USER_SESSIONS[message.from_user.id] = {
+            "awaiting_new_idea": True,
+            "turn_count": 0,
+            "stage": "new",
+        }
     await message.answer(
         NEW_IDEA_HINT,
         reply_markup=MAIN_KEYBOARD,
@@ -299,18 +376,32 @@ async def fallback_text(message: types.Message) -> None:
         )
         return
 
-    if session and not session.get("awaiting_new_idea") and session.get("original_idea"):
+    should_start_new_idea = (
+        not session
+        or bool(session.get("awaiting_new_idea"))
+        or _looks_like_new_idea(text)
+    )
+
+    if session and not session.get("awaiting_new_idea") and session.get("original_idea") and not should_start_new_idea:
         await message.answer("💀 Докапываюсь дальше...", reply_markup=MAIN_KEYBOARD)
         turn_count = int(session.get("turn_count", 1)) + 1
+        stage = str(session.get("stage", "client"))
+        is_final = turn_count >= MAX_TURNS_PER_IDEA or stage == "final"
         result = await continue_idea_chat(
             original_idea=str(session.get("original_idea", "")),
             last_bot_reply=str(session.get("last_bot_reply", "")),
             user_text=text,
             turn_count=turn_count,
+            stage=stage,
+            is_final=is_final,
         )
-        session["last_bot_reply"] = result
-        session["turn_count"] = turn_count
-        USER_SESSIONS[user_id] = session
+        if is_final:
+            USER_SESSIONS.pop(user_id, None)
+        else:
+            session["last_bot_reply"] = result
+            session["turn_count"] = turn_count
+            session["stage"] = _next_stage(stage)
+            USER_SESSIONS[user_id] = session
     else:
         if user_id:
             save_idea(user_id, text)
@@ -321,6 +412,7 @@ async def fallback_text(message: types.Message) -> None:
                 "original_idea": text,
                 "last_bot_reply": result,
                 "turn_count": 1,
+                "stage": "client",
                 "awaiting_new_idea": False,
             }
 
